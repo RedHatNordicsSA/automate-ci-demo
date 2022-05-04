@@ -25,7 +25,7 @@ fi
 
 while (( "$#" )); do
   case "$1" in
-    install|start|pac)
+    install|start|operator|destroy)
       COMMAND=$1
       shift
       ;;
@@ -41,19 +41,22 @@ while (( "$#" )); do
   esac
 done
 
-command.install() {
+command.operator() {
   # Bootstrap cluster
   info "Bootstrap cluster"
   info "Install OpenShift Pipelines Operator"
-  oc apply -k cluster-bootstrap/
+  oc apply -k manifests/cluster-bootstrap/
+}
 
+command.install() {
   # App namespaces
   info "Create demo infrastructure - CI"
   oc apply -k manifests/infra-ci
   info "Wait for Respoitory CRD to get established.."
   oc wait --for condition=established crd/repositories.pipelinesascode.tekton.dev --timeout=60s || exit
   info "Configure pipelines-as-code with GitHub App info.."
-  oc -n pipelines-as-code create secret generic pipelines-as-code-secret \
+  [ -n "$PAC_GH_PRIVATE_KEY_PATH" -a -n "$PAC_GH_APP_ID" -a -n "$PAC_GH_WEBHOOK_SECRET" ] && \
+    oc -n pipelines-as-code create secret generic pipelines-as-code-secret \
         --from-literal github-private-key="$(cat $PAC_GH_PRIVATE_KEY_PATH)" \
         --from-literal github-application-id="$PAC_GH_APP_ID" \
         --from-literal webhook.secret="$PAC_GH_WEBHOOK_SECRET"
@@ -105,6 +108,12 @@ command.start() {
     serviceAccountName: pipeline
 EOF
   oc apply -f /tmp/pipelinerun.yaml && rm -f /tmp/pipelinerun.yaml
+}
+
+command.destroy() {
+  info "Destroying open-tour-ci, open-tour-dev namespaces"
+  oc delete namespace/open-tour-ci namespace/open-tour-dev
+  oc wait --for=delete namespace/open-tour-ci namespace/open-tour-dev --timeout=60s
 }
 
 main() {
