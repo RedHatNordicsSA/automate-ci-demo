@@ -12,22 +12,23 @@ spec:
       description: revision to be used
       name: git-revision
       type: string
-    - name: context-dir
-      default: "the-source"
-      type: string
+    - default: the-source
       description: Where to checkout the source relative to the workspace
-    - name: image-name
+      name: context-dir
       type: string
+    - default: quay.io/jwennerberg/person-service
       description: the name of the target image including registry
-      default: quay.io/jwennerberg/person-service
-    - name: image-username
+      name: image-name
       type: string
-      description: the username you use to access the registry
-    - name: image-password
+    - description: the username you use to access the registry
+      name: image-username
       type: string
-      description: The password you use to access the registry
-    - name: target-namespace
-      description: The name of the namespace to apply the result to
+    - description: The password you use to access the registry
+      name: image-password
+      type: string
+    - description: The name of the namespace to apply the result to
+      name: target-namespace
+      type: string
   tasks:
     - name: git-clone
       params:
@@ -56,7 +57,7 @@ spec:
             - '-Dquarkus.container-image.push=false'
             - '-Dquarkus.container-image.build=false'
         - name: CONTEXT_DIR
-          value: "$(params.context-dir)/person-service"
+          value: $(params.context-dir)/person-service
       runAfter:
         - git-clone
       taskRef:
@@ -67,6 +68,44 @@ spec:
           workspace: shared-workspace
         - name: maven-settings
           workspace: maven-settings
+    - name: code-analysis
+      runAfter:
+        - git-clone
+      taskSpec:
+        metadata: {}
+        spec: null
+        steps:
+          - image: 'registry.access.redhat.com/ubi8/ubi-micro:8.5'
+            name: code-analysis
+            resources: {}
+            script: |
+              echo "# Static analysis"
+              exit 0
+            workingDir: $(workspaces.source.path)
+        workspaces:
+          - name: source
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    - name: generate-report
+      runAfter:
+        - git-clone
+      taskSpec:
+        metadata: {}
+        spec: null
+        steps:
+          - image: 'registry.access.redhat.com/ubi8/ubi-micro:8.5'
+            name: code-analysis
+            resources: {}
+            script: |
+              echo "# Generate dependency report"
+              exit 0
+            workingDir: $(workspaces.source.path)
+        workspaces:
+          - name: source
+      workspaces:
+        - name: source
+          workspace: shared-workspace
     - name: build-and-push-image
       params:
         - name: GOALS
@@ -80,9 +119,11 @@ spec:
             - '-Dquarkus.container-image.username=$(params.image-username)'
             - '-Dquarkus.container-image.password=$(params.image-password)'
         - name: CONTEXT_DIR
-          value: "$(params.context-dir)/person-service"
+          value: $(params.context-dir)/person-service
       runAfter:
         - package
+        - code-analysis
+        - generate-report
       taskRef:
         kind: Task
         name: maven-caching
@@ -91,7 +132,25 @@ spec:
           workspace: shared-workspace
         - name: maven-settings
           workspace: maven-settings
-    - name: apply-kustomize
+    - name: image-check
+      runAfter:
+        - build-and-push-image
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+    - name: image-scan
+      runAfter:
+        - build-and-push-image
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+    - name: deploy-check
+      runAfter:
+        - build-and-push-image
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+    - name: deploy
       params:
         - name: kustomize-dir
           value: $(params.context-dir)/manifests/overlays/dev
@@ -101,16 +160,22 @@ spec:
           value: $(params.image-name)
         - name: image-digest-path
           value: $(params.context-dir)/person-service/target
+      runAfter:
+        - image-check
+        - image-scan
+        - deploy-check
       taskRef:
         kind: Task
         name: kustomize
-      runAfter:
-        - build-and-push-image
       workspaces:
         - name: source
           workspace: shared-workspace
+    - name: performance-test
+      runAfter:
+        - deploy
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
   workspaces:
     - name: shared-workspace
-      optional: false
     - name: maven-settings
-      optional: false
